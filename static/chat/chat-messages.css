@@ -74,6 +74,37 @@
   letter-spacing: -0.025em;
 }
 .empty-state p { font-size: 14px; line-height: 1.65; max-width: 340px; color: var(--text-muted); }
+.empty-state-actions {
+  display: none;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 18px;
+}
+.empty-state.empty-state--workspace-empty .empty-state-actions {
+  display: flex;
+}
+.empty-state-action {
+  min-width: 132px;
+  min-height: 46px;
+  padding: 12px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.empty-state-action.primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+.empty-state-action:hover {
+  border-color: var(--border-strong);
+}
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
@@ -230,6 +261,30 @@
   flex: 0 0 auto;
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* ---- ChatGPT-style message polish ---- */
+.messages {
+  padding-top: 18px;
+}
+
+.msg-user-bubble {
+  border-radius: 18px;
+  border-bottom-right-radius: 7px;
+  padding: 10px 15px;
+}
+
+.msg-images .attachment-card {
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.attachment-file-icon {
+  border-radius: 11px;
+}
+
+.attachment-download-btn {
+  min-height: 30px;
 }
 .msg-user-status-uploading .msg-user-status-dot,
 .msg-user-status-sending .msg-user-status-dot {
@@ -480,6 +535,20 @@
 .thinking-header:hover { color: var(--text); }
 .thinking-icon { font-size: 14px; flex-shrink: 0; }
 .thinking-label { flex: 1; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thinking-block.running .thinking-icon {
+  animation: thinking-spin 2s linear infinite;
+}
+.thinking-block.running .thinking-label {
+  animation: thinking-pulse 2s ease-in-out infinite;
+}
+@keyframes thinking-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 .thinking-chevron {
   font-size: 9px; transition: transform 0.2s; color: var(--text-muted);
   display: inline-flex; align-items: center; justify-content: center;

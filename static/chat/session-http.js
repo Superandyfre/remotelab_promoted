@@ -93,6 +93,8 @@ function notifyCompletion(session) {
 const FOREGROUND_REFRESH_THROTTLE_MS = 1500;
 const FOREGROUND_SESSION_LIST_STALE_MS = 15000;
 const FOREGROUND_IDLE_SESSION_STALE_MS = 15000;
+const EVENT_DELTA_REFRESH_ENABLED = true;
+const EVENT_REFRESH_METRICS_SAMPLE_LIMIT = 80;
 let foregroundRefreshPromise = null;
 let foregroundRefreshHandlersReady = false;
 let lastForegroundRefreshAt = 0;
@@ -101,6 +103,86 @@ let lastArchivedSessionsRefreshAt = 0;
 let lastCurrentSessionRefreshAt = 0;
 let lastCurrentSessionRefreshSessionId = null;
 let pendingCurrentSessionRefreshOptions = null;
+
+function nowPerfMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function estimatePayloadBytes(payload) {
+  try {
+    const serialized = JSON.stringify(payload);
+    if (typeof serialized !== "string") return 0;
+    if (typeof TextEncoder === "function") {
+      return new TextEncoder().encode(serialized).length;
+    }
+    return serialized.length;
+  } catch {
+    return 0;
+  }
+}
+
+function ensureEventRefreshMetricsStore() {
+  const root = typeof window !== "undefined" ? window : globalThis;
+  if (!root.__remotelabEventRefreshMetrics || typeof root.__remotelabEventRefreshMetrics !== "object") {
+    root.__remotelabEventRefreshMetrics = {
+      startedAt: new Date().toISOString(),
+      totals: {
+        fullFetches: 0,
+        deltaFetches: 0,
+        deltaApplied: 0,
+        deltaFallbacks: 0,
+        renderedResets: 0,
+        renderedAppends: 0,
+        renderedNoops: 0,
+      },
+      last: null,
+      samples: [],
+    };
+  }
+  if (typeof root.remotelabGetEventRefreshMetrics !== "function") {
+    root.remotelabGetEventRefreshMetrics = () => {
+      const snapshot = root.__remotelabEventRefreshMetrics || {};
+      return JSON.parse(JSON.stringify(snapshot));
+    };
+  }
+  return root.__remotelabEventRefreshMetrics;
+}
+
+function recordEventRefreshMetric(sample = {}) {
+  const store = ensureEventRefreshMetricsStore();
+  const mode = sample.mode === "delta" ? "delta" : "full";
+  const outcome = typeof sample.outcome === "string" ? sample.outcome : "unknown";
+  const renderMode = typeof sample.renderMode === "string" ? sample.renderMode : "";
+  const normalized = {
+    ...sample,
+    mode,
+    outcome,
+    renderMode,
+    at: new Date().toISOString(),
+  };
+  if (mode === "delta") {
+    store.totals.deltaFetches += 1;
+    if (outcome === "applied") {
+      store.totals.deltaApplied += 1;
+    }
+    if (outcome.startsWith("fallback")) {
+      store.totals.deltaFallbacks += 1;
+    }
+  } else {
+    store.totals.fullFetches += 1;
+  }
+  if (renderMode === "reset") store.totals.renderedResets += 1;
+  if (renderMode === "append") store.totals.renderedAppends += 1;
+  if (renderMode === "noop") store.totals.renderedNoops += 1;
+  store.last = normalized;
+  store.samples.push(normalized);
+  if (store.samples.length > EVENT_REFRESH_METRICS_SAMPLE_LIMIT) {
+    store.samples.splice(0, store.samples.length - EVENT_REFRESH_METRICS_SAMPLE_LIMIT);
+  }
+}
 
 function buildSessionRefreshRequestOptions(forceFresh = false) {
   return forceFresh
@@ -314,7 +396,7 @@ function buildSessionListOrganizerSessionMetadata(session) {
 function buildSessionListOrganizerPayload() {
   const activeSessions = getActiveSessions();
   return {
-    tool: selectedTool || preferredTool || "codex",
+    tool: selectedTool || preferredTool || "claude",
     ...(selectedModel ? { model: selectedModel } : {}),
     ...(selectedEffort ? { effort: selectedEffort } : {}),
     thinking: thinkingEnabled === true,
@@ -346,10 +428,12 @@ async function createSessionListOrganizerRun(payload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      folder: typeof window.remotelabGetDefaultSessionFolder === "function"
-        ? window.remotelabGetDefaultSessionFolder()
-        : "~",
-      tool: payload?.tool || "codex",
+      folder: typeof window.remotelabGetSelectedSessionFolder === "function"
+        ? window.remotelabGetSelectedSessionFolder()
+        : (typeof window.remotelabGetDefaultSessionFolder === "function"
+          ? window.remotelabGetDefaultSessionFolder()
+          : "~"),
+      tool: payload?.tool || "claude",
       name: "sort session list",
       systemPrompt: SESSION_LIST_ORGANIZER_SYSTEM_PROMPT,
       internalRole: SESSION_LIST_ORGANIZER_INTERNAL_ROLE,
@@ -408,6 +492,9 @@ function hasRenderedEventSnapshot(sessionId) {
 }
 
 function shouldFetchSessionEventsForRefresh(sessionId, session) {
+  if (!Number.isInteger(renderedEventState.eventCount) || renderedEventState.eventCount === 0) {
+    return true;
+  }
   const runState = getSessionRunState(session);
   if (runState !== "running") return true;
   if (!hasRenderedEventSnapshot(sessionId)) return true;
@@ -415,6 +502,34 @@ function shouldFetchSessionEventsForRefresh(sessionId, session) {
   if (renderedEventState.runningBlockExpanded === true) return true;
   const latestSeq = Number.isInteger(session?.latestSeq) ? session.latestSeq : 0;
   return latestSeq > renderedEventState.latestSeq;
+}
+
+function shouldAttemptEventDeltaFetch(
+  sessionId,
+  { runState = "idle" } = {},
+) {
+  if (!EVENT_DELTA_REFRESH_ENABLED) return false;
+  if (isShareSnapshotReadOnlyMode()) return false;
+  if (currentSessionId !== sessionId) return false;
+  if (renderedEventState.sessionId !== sessionId) return false;
+  if (!hasRenderedEventSnapshot(sessionId)) return false;
+  return Number.isInteger(renderedEventState.latestSeq) && renderedEventState.latestSeq >= 0;
+}
+
+async function fetchSessionEventDelta(sessionId, afterSeq, { forceFresh = false } = {}) {
+  const query = new URLSearchParams();
+  query.set("filter", "visible");
+  query.set("afterSeq", String(Math.max(0, Number.isInteger(afterSeq) ? afterSeq : 0)));
+  const data = await fetchJsonOrRedirect(
+    `/api/sessions/${encodeURIComponent(sessionId)}/events/delta?${query.toString()}`,
+    buildSessionRefreshRequestOptions(forceFresh),
+  );
+  return {
+    events: Array.isArray(data?.events) ? data.events : [],
+    latestSeq: Number.isInteger(data?.latestSeq) ? data.latestSeq : null,
+    resetRequired: data?.resetRequired === true,
+    reason: typeof data?.reason === "string" ? data.reason : "",
+  };
 }
 
 function getEventRenderPlan(sessionId, events) {
@@ -767,6 +882,18 @@ async function fetchSessionSidebar(sessionId, { forceFresh = false } = {}) {
   return upsertSession(data.session);
 }
 
+function getWorkspaceFilteredSessionListUrl(baseUrl) {
+  const folder = typeof window.remotelabGetSelectedSessionFolder === "function"
+    ? window.remotelabGetSelectedSessionFolder()
+    : (typeof window.remotelabGetDefaultSessionFolder === "function"
+      ? window.remotelabGetDefaultSessionFolder()
+      : "");
+  const normalizedFolder = typeof folder === "string" ? folder.trim() : "";
+  if (!normalizedFolder) return baseUrl;
+  const separator = String(baseUrl).includes("?") ? "&" : "?";
+  return `${baseUrl}${separator}folder=${encodeURIComponent(normalizedFolder)}`;
+}
+
 async function fetchArchivedSessions({ forceFresh = false } = {}) {
   if (visitorMode) return [];
   if (archivedSessionsRefreshPromise) {
@@ -796,7 +923,7 @@ async function fetchArchivedSessions({ forceFresh = false } = {}) {
   const request = (async () => {
     try {
       const data = await fetchJsonOrRedirect(
-        ARCHIVED_SESSION_LIST_URL,
+        getWorkspaceFilteredSessionListUrl(ARCHIVED_SESSION_LIST_URL),
         buildSessionRefreshRequestOptions(forceFresh),
       );
       const nextArchivedSessions = applyArchivedSessionListState(data.sessions || [], {
@@ -847,7 +974,7 @@ async function updateSessionRecord(sessionId, payload = {}) {
 async function fetchSessionsList({ forceFresh = false } = {}) {
   if (visitorMode) return [];
   const data = await fetchJsonOrRedirect(
-    SESSION_LIST_URL,
+    getWorkspaceFilteredSessionListUrl(SESSION_LIST_URL),
     buildSessionRefreshRequestOptions(forceFresh),
   );
   applySessionListState(data.sessions || [], {
@@ -934,6 +1061,12 @@ async function organizeSessionListWithAgent({ closeSidebar = false } = {}) {
 }
 
 function applyAttachedSessionState(id, session) {
+  if (inputArea) {
+    inputArea.hidden = false;
+  }
+  if (typeof syncEmptyStateUi === "function") {
+    syncEmptyStateUi();
+  }
   const attachedSessionRenderState = getAttachedSessionRenderState();
   const nextSignature = getComparableAttachedSessionStateSignature(session || null);
   const shouldRefreshUi = attachedSessionRenderState.sessionId !== id
@@ -1094,18 +1227,93 @@ async function fetchSessionEvents(
   sessionId,
   { runState = "idle", viewportIntent = "preserve", forceFresh = false } = {},
 ) {
+  const requestStartedAt = nowPerfMs();
   const normalizedViewportIntent = normalizeSessionViewportIntent(viewportIntent);
   const hadRenderedMessages =
     messagesInner.children.length > 0 && emptyState.parentNode !== messagesInner;
   const shouldStickToBottom =
     !hadRenderedMessages ||
     messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+  if (shouldAttemptEventDeltaFetch(sessionId, { runState })) {
+    const afterSeq = Number.isInteger(renderedEventState.latestSeq)
+      ? renderedEventState.latestSeq
+      : 0;
+    const deltaStartedAt = nowPerfMs();
+    try {
+      const delta = await fetchSessionEventDelta(sessionId, afterSeq, { forceFresh });
+      const deltaRequestMs = Math.max(0, nowPerfMs() - deltaStartedAt);
+      if (currentSessionId !== sessionId) return delta.events;
+      const hasBackwardSeq = Number.isInteger(delta.latestSeq)
+        && delta.latestSeq < renderedEventState.latestSeq;
+      const hasMutatedEvent = delta.events.some((event) =>
+        Number.isInteger(event?.seq) && event.seq <= afterSeq);
+      if (!delta.resetRequired && !hasBackwardSeq && !hasMutatedEvent) {
+        const renderStartedAt = nowPerfMs();
+        for (const event of delta.events) {
+          reconcilePendingMessageState(event);
+          renderEvent(event, false);
+        }
+        appendRenderedEventStateDelta(sessionId, delta.events, {
+          runState,
+          latestSeq: delta.latestSeq,
+        });
+        const latestTurnStart = applyFinishedTurnCollapseState();
+        if (shouldOpenCurrentSessionFromTop({ sessionId, viewportIntent: normalizedViewportIntent })) {
+          scrollCurrentSessionViewportToTop();
+        } else if (
+          normalizedViewportIntent === "session_entry"
+          && shouldFocusLatestTurnStartOnSessionEntry(sessionId, latestTurnStart)
+        ) {
+          scrollNodeToTop(latestTurnStart);
+        } else if (delta.events.length > 0 && shouldStickToBottom) {
+          scrollToBottom();
+        }
+        const renderMs = Math.max(0, nowPerfMs() - renderStartedAt);
+        recordEventRefreshMetric({
+          mode: "delta",
+          outcome: "applied",
+          renderMode: "append",
+          requestMs: deltaRequestMs,
+          renderMs,
+          payloadBytes: estimatePayloadBytes(delta),
+          eventCount: delta.events.length,
+          latestSeq: delta.latestSeq,
+          totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+        });
+        return delta.events;
+      }
+      recordEventRefreshMetric({
+        mode: "delta",
+        outcome: "fallback_reset",
+        renderMode: "noop",
+        requestMs: deltaRequestMs,
+        payloadBytes: estimatePayloadBytes(delta),
+        eventCount: delta.events.length,
+        latestSeq: delta.latestSeq,
+        fallbackReason: delta.reason || (delta.resetRequired ? "reset_required" : (hasBackwardSeq ? "backward_seq" : "mutated_event")),
+        totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+      });
+    } catch (error) {
+      recordEventRefreshMetric({
+        mode: "delta",
+        outcome: "fallback_error",
+        renderMode: "noop",
+        requestMs: Math.max(0, nowPerfMs() - deltaStartedAt),
+        payloadBytes: 0,
+        eventCount: 0,
+        fallbackReason: error?.message || "delta_error",
+        totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+      });
+      console.warn("[events-delta] fallback to full events fetch:", error?.message || error);
+    }
+  }
   const data = isShareSnapshotReadOnlyMode()
     ? { events: getShareSnapshotDisplayEvents() }
     : await fetchJsonOrRedirect(
       `/api/sessions/${encodeURIComponent(sessionId)}/events?filter=visible`,
       buildSessionRefreshRequestOptions(forceFresh),
     );
+  const fullRequestMs = Math.max(0, nowPerfMs() - requestStartedAt);
   const events = data.events || [];
   if (currentSessionId !== sessionId) return events;
   const renderPlan = getEventRenderPlan(sessionId, events);
@@ -1118,11 +1326,23 @@ async function fetchSessionEvents(
       && refreshExpandedRunningThinkingBlock(sessionId, runningEvent)
     ) {
       updateRenderedEventState(sessionId, events, { runState });
+      recordEventRefreshMetric({
+        mode: "full",
+        outcome: "applied",
+        renderMode: "append",
+        requestMs: fullRequestMs,
+        renderMs: 0,
+        payloadBytes: estimatePayloadBytes(data),
+        eventCount: renderPlan.events.length,
+        latestSeq: getLatestEventSeq(events),
+        totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+      });
       return renderPlan.events;
     }
   }
 
   if (renderPlan.mode === "reset") {
+    const renderStartedAt = nowPerfMs();
     const preserveRunningBlockExpanded =
       renderedEventState.sessionId === sessionId
       && renderedEventState.runState === "running"
@@ -1151,10 +1371,23 @@ async function fetchSessionEvents(
     } else if (events.length > 0 && shouldStickToBottom) {
       scrollToBottom();
     }
+    const renderMs = Math.max(0, nowPerfMs() - renderStartedAt);
+    recordEventRefreshMetric({
+      mode: "full",
+      outcome: "applied",
+      renderMode: "reset",
+      requestMs: fullRequestMs,
+      renderMs,
+      payloadBytes: estimatePayloadBytes(data),
+      eventCount: events.length,
+      latestSeq: renderedEventState.latestSeq,
+      totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+    });
     return events;
   }
 
   if (renderPlan.mode === "append") {
+    const renderStartedAt = nowPerfMs();
     for (const event of renderPlan.events) {
       reconcilePendingMessageState(event);
       renderEvent(event, false);
@@ -1171,6 +1404,18 @@ async function fetchSessionEvents(
     } else if (renderPlan.events.length > 0 && shouldStickToBottom) {
       scrollToBottom();
     }
+    const renderMs = Math.max(0, nowPerfMs() - renderStartedAt);
+    recordEventRefreshMetric({
+      mode: "full",
+      outcome: "applied",
+      renderMode: "append",
+      requestMs: fullRequestMs,
+      renderMs,
+      payloadBytes: estimatePayloadBytes(data),
+      eventCount: renderPlan.events.length,
+      latestSeq: renderedEventState.latestSeq,
+      totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+    });
     return renderPlan.events;
   }
 
@@ -1184,6 +1429,17 @@ async function fetchSessionEvents(
   ) {
     scrollNodeToTop(latestTurnStart);
   }
+  recordEventRefreshMetric({
+    mode: "full",
+    outcome: "applied",
+    renderMode: "noop",
+    requestMs: fullRequestMs,
+    renderMs: 0,
+    payloadBytes: estimatePayloadBytes(data),
+    eventCount: 0,
+    latestSeq: renderedEventState.latestSeq,
+    totalElapsedMs: Math.max(0, nowPerfMs() - requestStartedAt),
+  });
   return events;
 }
 

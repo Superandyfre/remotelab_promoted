@@ -49,6 +49,7 @@ function buildRuntimeSelectionPayload() {
     selectedEffort: currentToolReasoningKind === 'enum' ? (selectedEffort || '') : '',
     thinkingEnabled: currentToolReasoningKind === 'toggle' ? thinkingEnabled === true : false,
     reasoningKind: currentToolReasoningKind || 'none',
+    interactionMode: (typeof inlineAgentSelect !== 'undefined' && inlineAgentSelect && inlineAgentSelect.value === '__plan') ? 'plan' : '',
   };
 }
 
@@ -482,6 +483,9 @@ function syncShareButton() {
   if (!visible) {
     resetHeaderActionButton(shareSnapshotBtn);
   }
+  if (typeof syncMobileDisclosureState === "function") {
+    syncMobileDisclosureState();
+  }
 }
 
 function syncForkButton() {
@@ -695,7 +699,7 @@ async function saveSimpleToolConfig() {
   }
 }
 
-function renderInlineToolOptions(selectedValue, emptyMessage = "No tools found") {
+function renderInlineToolOptions(selectedValue, emptyMessage = t("settings.apps.noToolsAvailable")) {
   inlineToolSelect.disabled = !canChangeRuntimeSelectionFromUi();
   inlineToolSelect.innerHTML = "";
 
@@ -703,7 +707,8 @@ function renderInlineToolOptions(selectedValue, emptyMessage = "No tools found")
     const emptyOpt = document.createElement("option");
     emptyOpt.value = "";
     emptyOpt.textContent = emptyMessage;
-    emptyOpt.disabled = true;
+    // Keep placeholder option enabled so selectedIndex is stable on mobile browsers.
+    emptyOpt.disabled = false;
     emptyOpt.selected = true;
     inlineToolSelect.appendChild(emptyOpt);
   } else {
@@ -724,7 +729,22 @@ function renderInlineToolOptions(selectedValue, emptyMessage = "No tools found")
     inlineToolSelect.value = selectedValue;
   } else if (toolsList[0]) {
     inlineToolSelect.value = toolsList[0].id;
+  } else {
+    inlineToolSelect.selectedIndex = 0;
   }
+}
+
+function setSingleOption(selectEl, text, { disabled = false, selected = true } = {}) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
+  const opt = document.createElement("option");
+  opt.value = "";
+  opt.textContent = text;
+  opt.disabled = disabled;
+  opt.selected = selected;
+  selectEl.appendChild(opt);
+  // Ensure selectedIndex is set to 0 for the single option
+  selectEl.selectedIndex = 0;
 }
 
 function normalizeInlineAgentOptionName(value) {
@@ -764,6 +784,7 @@ function getInlineAgentOptions() {
   );
   return [
     { id: "", name: t("compose.agent.default") },
+    { id: "__plan", name: t("compose.agent.mode.plan") },
     ...visibleAgents.map((app) => ({
       id: app.id,
       name: normalizeInlineAgentOptionName(app.name) || t("settings.apps.untitled"),
@@ -790,6 +811,14 @@ function renderInlineAgentOptions(selectedValue = "") {
     inlineAgentSelect.value = selectedValue;
   } else {
     inlineAgentSelect.value = "";
+  }
+  // If this select has been upgraded to a CustomSelect instance, force a sync
+  // so the custom trigger text reflects the new native state immediately.
+  try {
+    const cs = window.getCustomSelect ? window.getCustomSelect(inlineAgentSelect) : null;
+    if (cs && typeof cs._syncFromNative === 'function') cs._syncFromNative();
+  } catch (err) {
+    // non-fatal
   }
 }
 
@@ -827,7 +856,8 @@ async function refreshInlineAgentPicker({ force = false } = {}) {
     ? getPreferredAgentTemplateId()
     : "";
   const preferredAgent = findInlineAgentById(preferredAgentId);
-  if (preferredAgentId && !preferredAgent) {
+  // Allow special pseudo-option '__plan' to be treated as a valid pref, do not clear it
+  if (preferredAgentId && !preferredAgent && preferredAgentId !== '__plan') {
     if (typeof setPreferredAgentTemplate === "function") {
       setPreferredAgentTemplate("");
     }
@@ -903,7 +933,14 @@ async function loadInlineTools({ skipModelLoad = false } = {}) {
     selectedModel = null;
     selectedEffort = null;
     inlineToolSelect.disabled = true;
-    inlineToolSelect.innerHTML = "";
+    setSingleOption(inlineToolSelect, t("compose.agent.default") || "Agent");
+    inlineModelSelect.disabled = true;
+    setSingleOption(inlineModelSelect, t("tooling.defaultModel") || "Default model");
+    inlineModelSelect.style.display = "none";
+    effortSelect.disabled = true;
+    setSingleOption(effortSelect, t("tooling.thinking") || "Thinking");
+    effortSelect.style.display = "none";
+    thinkingToggle.style.display = "none";
     return;
   }
   try {
@@ -912,10 +949,11 @@ async function loadInlineTools({ skipModelLoad = false } = {}) {
     const initialTool = refreshPrimaryToolPicker();
     if (initialTool) {
       selectedTool = initialTool;
-      if (!preferredTool) {
+      if (!preferredTool || !toolsList.some((tool) => tool.id === preferredTool)) {
         preferredTool = initialTool;
         localStorage.setItem("preferredTool", preferredTool);
       }
+      localStorage.setItem("selectedTool", selectedTool);
     }
     if (!skipModelLoad) {
       await loadModelsForCurrentTool();
@@ -925,7 +963,7 @@ async function loadInlineTools({ skipModelLoad = false } = {}) {
     allToolsList = [];
     toolsList = [];
     console.warn("[tools] Failed to load tools:", err.message);
-    renderInlineToolOptions("", "Failed to load tools");
+    renderInlineToolOptions("", t("settings.apps.loadingFailed"));
   }
 }
 
@@ -955,6 +993,8 @@ if (inlineAgentSelect) {
         name: nextAgent?.name || "",
       });
     }
+    queueRuntimeSelectionSync();
+    persistCurrentSessionToolPreferences();
   });
 }
 
@@ -976,8 +1016,10 @@ async function loadModelsForCurrentTool({ refresh = false } = {}) {
     currentToolReasoningLabel = t("tooling.thinking");
     currentToolReasoningDefault = null;
     selectedEffort = null;
-    inlineModelSelect.innerHTML = "";
+    setSingleOption(inlineModelSelect, t("tooling.defaultModel") || "Default model");
     inlineModelSelect.style.display = "none";
+    effortSelect.disabled = true;
+    setSingleOption(effortSelect, t("tooling.thinking") || "Thinking");
     thinkingToggle.style.display = "none";
     effortSelect.style.display = "none";
     return;
@@ -992,8 +1034,10 @@ async function loadModelsForCurrentTool({ refresh = false } = {}) {
     currentToolReasoningDefault = null;
     selectedModel = null;
     selectedEffort = null;
-    inlineModelSelect.innerHTML = "";
+    setSingleOption(inlineModelSelect, t("tooling.defaultModel") || "Default model");
     inlineModelSelect.style.display = "none";
+    effortSelect.disabled = true;
+    setSingleOption(effortSelect, t("tooling.thinking") || "Thinking");
     thinkingToggle.style.display = "none";
     effortSelect.style.display = "none";
     return;
@@ -1047,7 +1091,11 @@ async function loadModelsForCurrentTool({ refresh = false } = {}) {
     currentToolBaseReasoning = { kind: "none", label: t("tooling.thinking") };
     currentToolEffortLevels = null;
     currentToolReasoningKind = "none";
+    inlineModelSelect.disabled = true;
+    setSingleOption(inlineModelSelect, t("tooling.defaultModel") || "Default model");
     inlineModelSelect.style.display = "none";
+    effortSelect.disabled = true;
+    setSingleOption(effortSelect, t("tooling.thinking") || "Thinking");
     thinkingToggle.style.display = "none";
     effortSelect.style.display = "none";
   }

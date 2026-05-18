@@ -40,6 +40,7 @@ function applyVisitorMode(authInfo = null) {
   if (menuBtn) menuBtn.style.display = "none";
   if (sortSessionListBtn) sortSessionListBtn.style.display = "none";
   if (newSessionBtn) newSessionBtn.style.display = "none";
+  if (workspacePicker) workspacePicker.style.display = "none";
   // Hide tool/model selectors and context management (visitors use defaults)
   if (inlineAgentSelect) inlineAgentSelect.style.display = "none";
   if (inlineToolSelect) inlineToolSelect.style.display = "none";
@@ -56,6 +57,9 @@ function applyVisitorMode(authInfo = null) {
   }
   syncForkButton();
   syncShareButton();
+  if (typeof syncMobileDisclosureState === "function") {
+    syncMobileDisclosureState();
+  }
 }
 
 function applyAgentScopedMode(authInfo = null) {
@@ -102,6 +106,7 @@ function applyAgentScopedMode(authInfo = null) {
   if (menuBtn) menuBtn.style.display = "";
   if (newSessionBtn) newSessionBtn.style.display = hasAuthCapability("createSession") ? "" : "none";
   if (sortSessionListBtn) sortSessionListBtn.style.display = canOrganizeSessionList() ? "" : "none";
+  if (workspacePicker) workspacePicker.style.display = hasAuthCapability("createSession") ? "" : "none";
   if (tabAgents) tabAgents.style.display = "none";
   if (agentsPanel) agentsPanel.style.display = "none";
   if (inlineAgentSelect) inlineAgentSelect.style.display = canSwitchAgents() ? "" : "none";
@@ -124,6 +129,9 @@ function applyAgentScopedMode(authInfo = null) {
   }
   syncForkButton();
   syncShareButton();
+  if (typeof syncMobileDisclosureState === "function") {
+    syncMobileDisclosureState();
+  }
 }
 
 function applyShareSnapshotMode(snapshot) {
@@ -630,6 +638,33 @@ async function handleShareTargetData() {
   } catch (err) {
     console.warn("[share-target] Failed to process shared data:", err);
   }
+}
+
+if (typeof CustomSelect !== "undefined") {
+  // Compose area (compact inline)
+  window._composeCustomSelects = upgradeSelects(
+    "#inlineAgentSelect, #inlineToolSelect, #inlineModelSelect, #effortSelect",
+    { className: "cs-compact" },
+  );
+  // Sidebar workspace & filter (full width, secondary bg)
+  upgradeSelects(
+    "#workspaceSelect, #workspaceCustomFolderSelect, #sourceFilterSelect",
+    { className: "cs-full cs-full-bg" },
+  );
+  upgradeSelects(
+    "#workspaceBrowserSelect",
+    { className: "cs-full cs-browser" },
+  );
+  // Settings panel (full width)
+  upgradeSelects(
+    "#uiLanguageSelect, #uiThemeSelect, #thinkingBlockDisplaySelect, #voiceInputProviderSelect, #voiceInputClusterPresetSelect, #voiceInputLanguageSelect",
+    { className: "cs-full" },
+  );
+  // Add-tool modal selects
+  upgradeSelects(
+    "#addToolRuntimeFamilySelect, #addToolReasoningKindSelect",
+    { className: "cs-full" },
+  );
 }
 
 initApp();
