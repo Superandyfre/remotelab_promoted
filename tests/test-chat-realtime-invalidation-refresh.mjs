@@ -132,7 +132,7 @@ function assertJsonEqual(actual, expected, message) {
   await new Promise((resolve) => setImmediate(resolve));
   assertJsonEqual(
     context.__calls.current,
-    [{ forceFresh: true }],
+    [{ forceFresh: true, wsPushCaughtUp: false }],
     'current-session invalidations should force-fresh the active session',
   );
 }

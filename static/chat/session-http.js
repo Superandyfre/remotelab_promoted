@@ -104,6 +104,30 @@ let lastCurrentSessionRefreshAt = 0;
 let lastCurrentSessionRefreshSessionId = null;
 let pendingCurrentSessionRefreshOptions = null;
 
+// WS event-push dedup: when session_events arrive via WebSocket and are
+// rendered directly, a subsequent session_invalidated for the same data
+// can skip the full HTTP refresh if the push already covered the latest seq.
+const WS_EVENT_PUSH_SUPPRESS_MS = 600;
+let lastWsEventPushAt = 0;
+let lastWsEventPushSessionId = "";
+let lastWsEventPushLatestSeq = 0;
+
+function markWsEventPushApplied(sessionId, events) {
+  if (!sessionId || !Array.isArray(events) || events.length === 0) return;
+  lastWsEventPushSessionId = sessionId;
+  lastWsEventPushAt = Date.now();
+  const latestPushSeq = getLatestEventSeq(events);
+  if (Number.isInteger(latestPushSeq)) {
+    lastWsEventPushLatestSeq = latestPushSeq;
+  }
+}
+
+function isWsEventPushCaughtUp(sessionId) {
+  if (!sessionId || sessionId !== lastWsEventPushSessionId) return false;
+  if (Date.now() - lastWsEventPushAt > WS_EVENT_PUSH_SUPPRESS_MS) return false;
+  return lastWsEventPushLatestSeq >= (Number.isInteger(renderedEventState.latestSeq) ? renderedEventState.latestSeq : 0);
+}
+
 function nowPerfMs() {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
     return performance.now();
@@ -198,6 +222,7 @@ function mergeSessionRefreshOptions(current = {}, next = {}) {
       || normalizeSessionViewportIntent(next.viewportIntent) === "session_entry"
         ? "session_entry"
         : "preserve",
+    wsPushCaughtUp: current.wsPushCaughtUp === true || next.wsPushCaughtUp === true,
   };
 }
 
@@ -1081,6 +1106,9 @@ function applyAttachedSessionState(id, session) {
     syncBrowserState();
     syncForkButton();
     syncShareButton();
+    if (typeof syncWorkbenchInspectorSession === "function") {
+      syncWorkbenchInspectorSession(session);
+    }
     return false;
   }
   currentTokens = 0;
@@ -1127,6 +1155,9 @@ function applyAttachedSessionState(id, session) {
   syncBrowserState();
   syncForkButton();
   syncShareButton();
+  if (typeof syncWorkbenchInspectorSession === "function") {
+    syncWorkbenchInspectorSession(session);
+  }
   attachedSessionRenderState.sessionId = id;
   attachedSessionRenderState.signature = nextSignature;
   return true;
@@ -1448,11 +1479,19 @@ async function runCurrentSessionRefresh(
   {
     viewportIntent = hasAttachedSession ? "preserve" : "session_entry",
     forceFresh = false,
+    wsPushCaughtUp = false,
   } = {},
 ) {
   const session = await fetchSessionState(sessionId, { forceFresh });
   if (currentSessionId !== sessionId) return session;
   const runState = getSessionRunState(session);
+  // If a WS event push already rendered these events, skip the HTTP event
+  // fetch unless forceFresh is explicitly requested.
+  if (wsPushCaughtUp && !forceFresh) {
+    renderedEventState.sessionId = sessionId;
+    renderedEventState.runState = runState;
+    return session;
+  }
   if (shouldFetchSessionEventsForRefresh(sessionId, session)) {
     await fetchSessionEvents(sessionId, { runState, viewportIntent, forceFresh });
     return session;
@@ -1466,14 +1505,18 @@ async function refreshCurrentSession(
   {
     viewportIntent = hasAttachedSession ? "preserve" : "session_entry",
     forceFresh = false,
+    wsPushCaughtUp = false,
   } = {},
 ) {
   const sessionId = currentSessionId;
   if (!sessionId) return null;
-  const requestOptions = mergeSessionRefreshOptions(
-    { forceFresh: false, viewportIntent: hasAttachedSession ? "preserve" : "session_entry" },
-    { forceFresh, viewportIntent },
-  );
+  const requestOptions = {
+    ...mergeSessionRefreshOptions(
+      { forceFresh: false, viewportIntent: hasAttachedSession ? "preserve" : "session_entry" },
+      { forceFresh, viewportIntent },
+    ),
+    wsPushCaughtUp,
+  };
   if (currentSessionRefreshPromise) {
     pendingCurrentSessionRefresh = true;
     pendingCurrentSessionRefreshOptions = mergeSessionRefreshOptions(

@@ -234,6 +234,7 @@ async function main() {
     assert.match(page.text, /<script src="chat\/realtime\.js(?:\?v=[^"]*)?"/);
     assert.match(page.text, /<script src="chat\/realtime-render\.js(?:\?v=[^"]*)?"/);
     assert.match(page.text, /<script src="chat\/ui\.js(?:\?v=[^"]*)?"/);
+    assert.match(page.text, /<script src="chat\/workbench-inspector\.js(?:\?v=[^"]*)?"/);
     assert.match(page.text, /<script src="chat\/session-surface-ui\.js(?:\?v=[^"]*)?"/);
     assert.match(page.text, /<script src="chat\/session-list-ui\.js(?:\?v=[^"]*)?"/);
     assert.match(page.text, /<script src="chat\/instance-settings\.js(?:\?v=[^"]*)?"/);
@@ -790,6 +791,10 @@ async function main() {
     const uiAsset = await request(port, 'GET', '/chat/ui.js');
     assert.equal(uiAsset.status, 200, 'ui asset should load');
     assert.match(uiAsset.text, /\/api\/media\//, 'ui asset should load persisted media attachments from the media route');
+
+    const workbenchInspectorAsset = await request(port, 'GET', '/chat/workbench-inspector.js');
+    assert.equal(workbenchInspectorAsset.status, 200, 'workbench inspector asset should load');
+    assert.match(workbenchInspectorAsset.text, /function buildInspectorModel\(/);
 
     const sessionSurfaceUiAsset = await request(port, 'GET', '/chat/session-surface-ui.js');
     assert.equal(sessionSurfaceUiAsset.status, 200, 'session surface ui asset should load');

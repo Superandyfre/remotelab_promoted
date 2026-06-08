@@ -620,6 +620,174 @@ function findLatestPendingToolCard(root) {
   return null;
 }
 
+// --- File Edit Diff Rendering ---
+const FILE_EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+
+function parseFileEditToolInput(toolName, toolInput) {
+  if (!FILE_EDIT_TOOLS.has(toolName)) return null;
+  let input;
+  try {
+    input = typeof toolInput === "string" ? JSON.parse(toolInput) : toolInput;
+  } catch {
+    return null;
+  }
+  if (!input || typeof input !== "object") return null;
+  const filePath = input.file_path || input.path || "";
+  if (!filePath) return null;
+
+  switch (toolName) {
+    case "Write":
+      return {
+        filePath,
+        changeType: "add",
+        edits: [{ oldText: "", newText: input.content || "" }],
+      };
+    case "Edit":
+      return {
+        filePath,
+        changeType: "edit",
+        edits: [{
+          oldText: input.old_string || "",
+          newText: input.new_string || "",
+        }],
+      };
+    case "MultiEdit": {
+      const edits = Array.isArray(input.edits)
+        ? input.edits.map((e) => ({
+            oldText: e.old_string || "",
+            newText: e.new_string || "",
+          }))
+        : [];
+      return { filePath, changeType: "edit", edits };
+    }
+    default:
+      return null;
+  }
+}
+
+function computeLineDiff(oldText, newText) {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+
+  if (oldLines.length === 0 && newLines.length === 0) return [];
+  if (oldLines.length === 0) {
+    return newLines.map((text, i) => ({ type: "add", newLine: i + 1, text }));
+  }
+  if (newLines.length === 0) {
+    return oldLines.map((text, i) => ({ type: "remove", oldLine: i + 1, text }));
+  }
+
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp = new Array(m + 1);
+  for (let i = 0; i <= m; i++) {
+    dp[i] = new Array(n + 1).fill(0);
+  }
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  const diff = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      diff.unshift({ type: "equal", oldLine: i, newLine: j, text: oldLines[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: "add", newLine: j, text: newLines[j - 1] });
+      j--;
+    } else {
+      diff.unshift({ type: "remove", oldLine: i, text: oldLines[i - 1] });
+      i--;
+    }
+  }
+  return diff;
+}
+
+function renderFileEditDiffCard(evt) {
+  const editInfo = parseFileEditToolInput(evt.toolName, evt.toolInput);
+  if (!editInfo) return null;
+
+  let totalAdded = 0;
+  let totalRemoved = 0;
+  const allDiffs = [];
+  for (const edit of editInfo.edits) {
+    const diff = computeLineDiff(edit.oldText, edit.newText);
+    allDiffs.push(diff);
+    for (const entry of diff) {
+      if (entry.type === "add") totalAdded++;
+      if (entry.type === "remove") totalRemoved++;
+    }
+  }
+  if (totalAdded === 0 && totalRemoved === 0) return null;
+
+  const card = document.createElement("div");
+  card.className = "tool-card diff-card";
+  card.dataset.toolId = evt.id;
+
+  const header = document.createElement("div");
+  header.className = "diff-header";
+  const pathParts = editInfo.filePath.split("/");
+  const fileName = pathParts.pop() || editInfo.filePath;
+  const dirPath = pathParts.join("/");
+  header.innerHTML = `<span class="diff-file-path">
+      ${dirPath ? `<span class="diff-dir">${esc(dirPath)}/</span>` : ""}
+      <span class="diff-file-name">${esc(fileName)}</span>
+    </span>
+    <span class="diff-stats">
+      <span class="diff-stat-add">+${totalAdded}</span>
+      <span class="diff-stat-del">-${totalRemoved}</span>
+    </span>
+    <span class="tool-toggle">${renderUiIcon("chevron-right")}</span>`;
+
+  const body = document.createElement("div");
+  body.className = "diff-body tool-body";
+  body.id = "tool_" + evt.id;
+
+  const MAX_DIFF_LINES = 200;
+  let lineCount = 0;
+  for (const diff of allDiffs) {
+    for (const entry of diff) {
+      if (lineCount >= MAX_DIFF_LINES) break;
+      const row = document.createElement("div");
+      row.className = `diff-line diff-line-${entry.type}`;
+      const oldNum = document.createElement("span");
+      oldNum.className = "diff-num diff-num-old";
+      oldNum.textContent = (entry.type === "remove" || entry.type === "equal") && entry.oldLine ? entry.oldLine : "";
+      const newNum = document.createElement("span");
+      newNum.className = "diff-num diff-num-new";
+      newNum.textContent = (entry.type === "add" || entry.type === "equal") && entry.newLine ? entry.newLine : "";
+      const prefix = document.createElement("span");
+      prefix.className = "diff-prefix";
+      prefix.textContent = entry.type === "add" ? "+" : entry.type === "remove" ? "-" : " ";
+      const text = document.createElement("span");
+      text.className = "diff-text";
+      text.textContent = entry.text;
+      row.appendChild(oldNum);
+      row.appendChild(newNum);
+      row.appendChild(prefix);
+      row.appendChild(text);
+      body.appendChild(row);
+      lineCount++;
+    }
+  }
+
+  header.addEventListener("click", () => {
+    header.classList.toggle("expanded");
+    body.classList.toggle("expanded");
+  });
+
+  card.appendChild(header);
+  card.appendChild(body);
+  return card;
+}
+
 function renderToolUseInto(container, evt, { toolTracker = null } = {}) {
   if (!container) return null;
   if (toolTracker && evt.toolName) {
@@ -636,6 +804,29 @@ function renderToolResultInto(container, evt) {
 
   const body = targetCard.querySelector(".tool-body");
   if (!body) return null;
+
+  if (targetCard.classList.contains("diff-card")) {
+    const isSuccess = evt.exitCode === 0 || evt.exitCode === undefined;
+    const header = targetCard.querySelector(".diff-header");
+    if (header && !header.querySelector(".diff-result-badge")) {
+      const badge = document.createElement("span");
+      badge.className = `diff-result-badge ${isSuccess ? "success" : "fail"}`;
+      badge.innerHTML = isSuccess
+        ? `<svg viewBox="0 0 16 16" width="14" height="14"><path d="M13.5 4.5 6.5 11.5 3 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+        : `<svg viewBox="0 0 16 16" width="14" height="14"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+      const toggle = header.querySelector(".tool-toggle");
+      if (toggle) {
+        header.insertBefore(badge, toggle);
+      } else {
+        header.appendChild(badge);
+      }
+    }
+    const marker = document.createElement("span");
+    marker.className = "tool-result";
+    marker.hidden = true;
+    body.appendChild(marker);
+    return targetCard;
+  }
 
   const label = document.createElement("div");
   label.className = "tool-result-label";
@@ -845,10 +1036,19 @@ function renderHiddenBlockEventsInto(container, events) {
         renderManagerContextInto(container, event);
         break;
       case "tool_use":
+        if (FILE_EDIT_TOOLS.has(event.toolName)) {
+          const diffCard = renderFileEditDiffCard(event);
+          if (diffCard) {
+            messagesInner.appendChild(diffCard);
+            break;
+          }
+        }
         renderToolUseInto(container, event);
         break;
       case "tool_result":
-        renderToolResultInto(container, event);
+        if (!renderToolResultInto(container, event)) {
+          renderToolResultInto(messagesInner, event);
+        }
         break;
       case "file_change":
         renderFileChangeInto(container, event);
@@ -1027,6 +1227,16 @@ function renderThinkingBlockEvent(evt) {
 }
 
 function renderToolUse(evt) {
+  if (FILE_EDIT_TOOLS.has(evt.toolName)) {
+    const diffCard = renderFileEditDiffCard(evt);
+    if (diffCard) {
+      messagesInner.appendChild(diffCard);
+      if (currentThinkingBlock?.tools && evt.toolName) {
+        currentThinkingBlock.tools.add(evt.toolName);
+      }
+      return;
+    }
+  }
   const container = getThinkingBody();
   renderToolUseInto(container, evt, {
     toolTracker: currentThinkingBlock?.tools || null,
@@ -1038,7 +1248,10 @@ function renderToolResult(evt) {
     inThinkingBlock && currentThinkingBlock
       ? currentThinkingBlock.body
       : messagesInner;
-  renderToolResultInto(searchRoot, evt);
+  let result = renderToolResultInto(searchRoot, evt);
+  if (!result && searchRoot !== messagesInner) {
+    result = renderToolResultInto(messagesInner, evt);
+  }
 }
 
 function renderFileChange(evt) {

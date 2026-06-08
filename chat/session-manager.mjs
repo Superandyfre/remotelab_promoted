@@ -38,7 +38,7 @@ import {
   buildSessionControlState,
   buildSessionWorkState,
 } from './session-control-state.mjs';
-import { broadcastOwners, getClientsMatching } from './ws-clients.mjs';
+import { broadcastOwners, broadcastSessionEvents, getClientsMatching } from './ws-clients.mjs';
 import {
   buildTemporarySessionName,
   isSessionAutoRenamePending,
@@ -1330,9 +1330,19 @@ async function syncDetachedRunUnlocked(sessionId, runId) {
 
   const projection = await collectNormalizedRunEventDelta(run, manifest);
   const normalizedEvents = projection.normalizedEvents;
-  if (normalizedEvents.length > 0) {
-    await appendEvents(sessionId, normalizedEvents);
+  // Separate ephemeral text_delta events (typewriter streaming) from durable events.
+  // text_delta is only pushed via WS for live rendering; complete assistant messages
+  // carry the final text and are persisted normally.
+  const textDeltaEvents = normalizedEvents.filter((e) => e.type === 'text_delta');
+  const durableEvents = normalizedEvents.filter((e) => e.type !== 'text_delta');
+  let deltaStoredEvents = null;
+  if (durableEvents.length > 0) {
+    deltaStoredEvents = await appendEvents(sessionId, durableEvents);
     historyChanged = true;
+  }
+  // Ephemeral text deltas are pushed to WS without persisting to history.
+  if (textDeltaEvents.length > 0) {
+    deltaStoredEvents = [...(deltaStoredEvents || []), ...textDeltaEvents];
   }
 
   // Detect if the adapter emitted a "completed" status in this delta — meaning
@@ -1425,8 +1435,9 @@ async function syncDetachedRunUnlocked(sessionId, runId) {
     ? terminalLatestUsage.contextWindowTokens
     : contextWindowTokens;
 
+  let terminalStoredEvents = null;
   if (terminalTailEvents.length > 0) {
-    await appendEvents(sessionId, terminalTailEvents);
+    terminalStoredEvents = await appendEvents(sessionId, terminalTailEvents);
     historyChanged = true;
     run = await updateRun(runId, (current) => ({
       ...current,
@@ -1475,6 +1486,16 @@ async function syncDetachedRunUnlocked(sessionId, runId) {
     run = await getRun(runId) || run;
   }
 
+  // Push events even when history hasn't changed — text_delta events are
+  // ephemeral (not persisted) so historyChanged stays false, but they still
+  // need to reach the frontend for typewriter streaming.
+  const pushableEvents = [
+    ...(deltaStoredEvents || []),
+    ...(terminalStoredEvents || []),
+  ];
+  if (pushableEvents.length > 0) {
+    broadcastSessionEvents(sessionId, pushableEvents);
+  }
   if (historyChanged || sessionChanged) {
     broadcastSessionInvalidation(sessionId);
   }

@@ -3,6 +3,158 @@ function t(key, vars) {
   return window.remotelabT ? window.remotelabT(key, vars) : key;
 }
 
+// ---- Typewriter streaming state ----
+let streamingMessageEl = null;
+let streamingTextContent = "";
+let streamingPendingChars = "";
+let streamingAnimFrame = null;
+let streamingFinalizeCallback = null;
+let streamingLastRenderAt = 0;
+let streamingMarkdownRenderWarned = false;
+const STREAM_CHARS_PER_FRAME = 4;
+const STREAM_MARKDOWN_RENDER_INTERVAL_MS = 33;
+
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function renderStreamingBody(body, { force = false } = {}) {
+  if (!body) return false;
+  const currentTime = nowMs();
+  if (!force && streamingLastRenderAt && currentTime - streamingLastRenderAt < STREAM_MARKDOWN_RENDER_INTERVAL_MS) {
+    return false;
+  }
+  streamingLastRenderAt = currentTime;
+  if (typeof renderMarkdownIntoNode === "function") {
+    try {
+      renderMarkdownIntoNode(body, streamingTextContent);
+      return true;
+    } catch (error) {
+      if (!streamingMarkdownRenderWarned) {
+        console.warn("[streaming] Failed to render markdown incrementally:", error.message);
+        streamingMarkdownRenderWarned = true;
+      }
+    }
+  }
+  body.textContent = streamingTextContent;
+  return true;
+}
+
+function getOrCreateStreamingMessage() {
+  if (streamingMessageEl && streamingMessageEl.parentNode === messagesInner) {
+    return streamingMessageEl;
+  }
+  if (inThinkingBlock) finalizeThinkingBlock();
+  const div = document.createElement("div");
+  div.className = "msg-assistant md-content streaming";
+  const body = document.createElement("div");
+  body.className = "msg-assistant-body";
+  div.appendChild(body);
+  messagesInner.appendChild(div);
+  streamingMessageEl = div;
+  streamingTextContent = "";
+  streamingPendingChars = "";
+  streamingFinalizeCallback = null;
+  streamingLastRenderAt = 0;
+  streamingMarkdownRenderWarned = false;
+  return div;
+}
+
+function pumpStreamingAnimation() {
+  streamingAnimFrame = null;
+  if (!streamingMessageEl || !streamingPendingChars) {
+    // Animation complete — if a finalize callback is waiting, run it now
+    if (streamingFinalizeCallback) {
+      const cb = streamingFinalizeCallback;
+      streamingFinalizeCallback = null;
+      cb();
+    }
+    return;
+  }
+  const body = streamingMessageEl.querySelector(".msg-assistant-body");
+  if (!body) return;
+  const chunk = streamingPendingChars.slice(0, STREAM_CHARS_PER_FRAME);
+  streamingPendingChars = streamingPendingChars.slice(STREAM_CHARS_PER_FRAME);
+  streamingTextContent += chunk;
+  renderStreamingBody(body, { force: !streamingPendingChars });
+  const shouldScroll =
+    messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+  if (shouldScroll) scrollToBottom();
+  if (streamingPendingChars) {
+    streamingAnimFrame = requestAnimationFrame(pumpStreamingAnimation);
+  } else {
+    // Animation complete — if a finalize callback is waiting, run it now
+    if (streamingFinalizeCallback) {
+      const cb = streamingFinalizeCallback;
+      streamingFinalizeCallback = null;
+      cb();
+    }
+  }
+}
+
+function appendTextDelta(text) {
+  getOrCreateStreamingMessage();
+  if (!text) return;
+  streamingPendingChars += text;
+  if (emptyState.parentNode === messagesInner) emptyState.remove();
+  if (!streamingAnimFrame) {
+    streamingAnimFrame = requestAnimationFrame(pumpStreamingAnimation);
+  }
+}
+
+function flushStreamingAnimation() {
+  if (streamingAnimFrame) {
+    cancelAnimationFrame(streamingAnimFrame);
+    streamingAnimFrame = null;
+  }
+  if (streamingPendingChars && streamingMessageEl) {
+    const body = streamingMessageEl.querySelector(".msg-assistant-body");
+    if (body) {
+      streamingTextContent += streamingPendingChars;
+      renderStreamingBody(body, { force: true });
+    }
+    streamingPendingChars = "";
+  }
+  streamingFinalizeCallback = null;
+}
+
+function finalizeStreamingMessage(callback) {
+  // If animation is still running, queue the finalize for when it finishes
+  if (streamingPendingChars && streamingAnimFrame) {
+    streamingFinalizeCallback = () => {
+      _doFinalizeStreamingMessage();
+      if (callback) callback();
+    };
+    return;
+  }
+  flushStreamingAnimation();
+  _doFinalizeStreamingMessage();
+  if (callback) callback();
+}
+
+function _doFinalizeStreamingMessage() {
+  if (!streamingMessageEl || streamingMessageEl.parentNode !== messagesInner) {
+    streamingMessageEl = null;
+    streamingTextContent = "";
+    streamingPendingChars = "";
+    streamingAnimFrame = null;
+    streamingFinalizeCallback = null;
+    streamingLastRenderAt = 0;
+    streamingMarkdownRenderWarned = false;
+    return;
+  }
+  streamingMessageEl.remove();
+  streamingMessageEl = null;
+  streamingTextContent = "";
+  streamingPendingChars = "";
+  streamingAnimFrame = null;
+  streamingFinalizeCallback = null;
+  streamingLastRenderAt = 0;
+  streamingMarkdownRenderWarned = false;
+}
+
 function clearMessages({ preserveRunningBlockExpanded = false } = {}) {
   const nextRunningBlockExpanded = typeof preserveRunningBlockExpanded === "boolean"
     ? preserveRunningBlockExpanded
@@ -15,6 +167,15 @@ function clearMessages({ preserveRunningBlockExpanded = false } = {}) {
   // Reset thinking block state
   inThinkingBlock = false;
   currentThinkingBlock = null;
+  // Reset streaming state
+  if (streamingAnimFrame) cancelAnimationFrame(streamingAnimFrame);
+  streamingMessageEl = null;
+  streamingTextContent = "";
+  streamingPendingChars = "";
+  streamingAnimFrame = null;
+  streamingFinalizeCallback = null;
+  streamingLastRenderAt = 0;
+  streamingMarkdownRenderWarned = false;
 }
 
 function syncEmptyStateUi() {
@@ -40,6 +201,14 @@ function showEmpty() {
   }
   inThinkingBlock = false;
   currentThinkingBlock = null;
+  if (streamingAnimFrame) cancelAnimationFrame(streamingAnimFrame);
+  streamingMessageEl = null;
+  streamingTextContent = "";
+  streamingPendingChars = "";
+  streamingAnimFrame = null;
+  streamingFinalizeCallback = null;
+  streamingLastRenderAt = 0;
+  streamingMarkdownRenderWarned = false;
   if (typeof syncSessionTemplateControls === "function") {
     syncSessionTemplateControls();
   }
@@ -94,10 +263,24 @@ function renderEvent(evt, autoScroll) {
   let rendered = false;
 
   switch (evt.type) {
+    case "text_delta":
+      rendered = true;
+      appendTextDelta(evt.text || "");
+      break;
     case "message":
     case "attachment_delivery":
+      // Finalize any streaming placeholder before rendering the complete message.
+      // If typewriter animation is still running, queue the render until it finishes
+      // so the user sees the full typewriter effect before the markdown replacement.
+      if (evt.role === "assistant") {
+        finalizeStreamingMessage(() => {
+          renderMessage(evt);
+        });
+      } else {
+        finalizeStreamingMessage();
+        renderMessage(evt);
+      }
       rendered = true;
-      renderMessage(evt);
       break;
     case "collapsed_block":
       rendered = true;

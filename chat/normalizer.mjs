@@ -38,6 +38,10 @@ export function reasoningEvent(content) {
   return createEvent('reasoning', { role: 'assistant', content });
 }
 
+export function textDeltaEvent(blockIndex, text) {
+  return createEvent('text_delta', { role: 'assistant', blockIndex, text });
+}
+
 export function managerContextEvent(content, extra = {}) {
   return createEvent('manager_context', { role: 'system', content, ...extra });
 }

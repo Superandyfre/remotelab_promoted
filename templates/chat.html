@@ -34,10 +34,15 @@
     <span class="header-action-icon" data-icon="share" aria-hidden="true"></span>
     <span class="header-action-label" data-i18n="action.share">Share</span>
   </button>
+  <button class="header-review-btn" id="workbenchInspectorBtn" type="button" title="Review" aria-label="Review" aria-expanded="false" aria-controls="workbenchInspector" data-i18n-title="action.review" data-i18n-aria-label="action.review" hidden>
+    <span class="header-action-icon" data-icon="file" aria-hidden="true"></span>
+    <span class="header-action-label" data-i18n="action.review">Review</span>
+  </button>
   <button class="header-refresh-btn" id="refreshFrontendBtn" type="button" title="Reload latest frontend" aria-label="Reload latest frontend" data-i18n-title="action.reloadFrontend" data-i18n-aria-label="action.reloadFrontend" data-icon="refresh" hidden></button>
   <button class="header-more-btn" id="headerMoreBtn" type="button" aria-controls="headerOverflowMenu" aria-expanded="false" title="More" aria-label="More" data-i18n-title="action.more" data-i18n-aria-label="action.more" data-i18n="action.more">More</button>
   <div class="header-overflow-menu" id="headerOverflowMenu" hidden>
     <button class="header-overflow-menu-item" id="headerOverflowShareBtn" type="button" data-i18n="action.share">Share</button>
+    <button class="header-overflow-menu-item" id="headerOverflowReviewBtn" type="button" data-i18n="action.review">Review</button>
     <button class="header-overflow-menu-item" id="headerOverflowRefreshBtn" type="button" data-i18n="action.reloadFrontend">Reload latest frontend</button>
   </div>
   <span class="status-dot" id="statusDot"></span>
@@ -59,10 +64,6 @@
       </div>
       <div class="sidebar-search" id="sidebarSearch">
         <input class="sidebar-search-input" id="sessionSearchInput" type="search" placeholder="Search sessions…" autocomplete="off" data-i18n-placeholder="sidebar.search.placeholder" />
-      </div>
-      <div class="sidebar-view-switcher" id="sidebarViewSwitcher">
-        <button class="view-switch-btn active" id="viewInbox" data-view="inbox" data-i18n="sidebar.view.inbox">Inbox</button>
-        <button class="view-switch-btn" id="viewProjects" data-view="projects" data-i18n="sidebar.view.projects">Projects</button>
       </div>
       <div class="sidebar-workspace" id="workspacePicker">
         <div class="sidebar-section-title" data-i18n="sidebar.workspace.title">Workspace</div>
@@ -253,6 +254,21 @@
       </div>
     </div>
   </main>
+
+  <aside class="workbench-inspector" id="workbenchInspector" aria-label="Task inspector">
+    <div class="workbench-inspector-header">
+      <div class="workbench-inspector-title-block">
+        <div class="workbench-inspector-eyebrow" data-i18n="workbench.eyebrow">Workbench</div>
+        <h2 data-i18n="workbench.title">Task</h2>
+      </div>
+      <button class="workbench-inspector-close" id="workbenchInspectorCloseBtn" type="button" title="Close" aria-label="Close" data-i18n-title="action.close" data-i18n-aria-label="action.close" data-icon="close"></button>
+    </div>
+    <div class="workbench-inspector-tabs" role="tablist" aria-label="Task inspector tabs">
+      <button class="workbench-inspector-tab active" type="button" data-inspector-tab="summary" role="tab" aria-selected="true" data-i18n="workbench.tab.summary">Summary</button>
+      <button class="workbench-inspector-tab" type="button" data-inspector-tab="review" role="tab" aria-selected="false" data-i18n="workbench.tab.review">Review</button>
+    </div>
+    <div class="workbench-inspector-body" id="workbenchInspectorBody"></div>
+  </aside>
 </div>
 </div>
 
@@ -362,6 +378,7 @@
 <script src="chat/realtime.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
 <script src="chat/realtime-render.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
 <script src="chat/ui.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
+<script src="chat/workbench-inspector.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
 <script src="chat/session-surface-ui.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
 <script src="chat/session-list-ui.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>
 <script src="chat/instance-settings.js?v={{ASSET_VERSION}}" nonce="{{NONCE}}"></script>

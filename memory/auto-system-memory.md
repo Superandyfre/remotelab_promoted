@@ -46,3 +46,6 @@
 - RemoteLab 的流式输出方案不是 token 逐字流，而是基于事件 delta 的增量渲染方案。
 - ttyd 终端服务必须以 ubuntu 用户身份运行，而非 root，以避免安全风险。
 - 通过 nginx sub_filter 注入 PWA 代码（manifest.json、service worker、beforeinstallprompt 事件处理）是一种无需修改上游应用即可为其添加「安装为应用」能力的通用方案。适用于 ttyd 等不可修改源码的 Web 服务。
+- Cloudflare Zero Trust Access 策略会拦截非浏览器客户端（如 WebDAV 客户端）的请求（302 跳转登录页）。解决方案：为该子域单独创建 Access Application 并设为 Bypass 策略。
+- RemoteLab 前端改进可参考 Codex 客户端的“多 Agent 工作台”风格：高密度、低装饰、状态优先，围绕 project/thread、run 状态、工具调用、diff/review、artifact、审批和用户反馈点组织界面，而不是普通聊天页。
+- 针对 RemoteLab 的下一步 UI 优先级，曾建议先做 P1「任务侧栏 / Run Inspector」和 P2「只读 Review Pane」，因为它们最能把产品从聊天工具推进到 Codex 式 agent 工作台。
