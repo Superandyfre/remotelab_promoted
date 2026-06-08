@@ -346,6 +346,7 @@ const sidebarOverlay = document.getElementById("sidebarOverlay");
 const closeSidebar = document.getElementById("closeSidebar");
 const forkSessionBtn = document.getElementById("forkSessionBtn");
 const shareSnapshotBtn = document.getElementById("shareSnapshotBtn");
+const workbenchInspectorBtn = document.getElementById("workbenchInspectorBtn");
 const sidebarFilters = document.getElementById("sidebarFilters");
 const sidebarSearch = document.getElementById("sidebarSearch");
 const sessionSearchInput = document.getElementById("sessionSearchInput");
@@ -374,6 +375,7 @@ const refreshFrontendBtn = document.getElementById("refreshFrontendBtn");
 const headerMoreBtn = document.getElementById("headerMoreBtn");
 const headerOverflowMenu = document.getElementById("headerOverflowMenu");
 const headerOverflowShareBtn = document.getElementById("headerOverflowShareBtn");
+const headerOverflowReviewBtn = document.getElementById("headerOverflowReviewBtn");
 const headerOverflowRefreshBtn = document.getElementById("headerOverflowRefreshBtn");
 const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
@@ -456,8 +458,9 @@ function syncHeaderOverflowMenu() {
   if (!headerMoreBtn || !headerOverflowMenu) return;
   const mobile = isDisclosureMobileViewport();
   const shareAvailable = isHeaderActionAvailable(shareSnapshotBtn);
+  const reviewAvailable = isHeaderActionAvailable(workbenchInspectorBtn);
   const refreshAvailable = isHeaderActionAvailable(refreshFrontendBtn);
-  const hasItems = shareAvailable || refreshAvailable;
+  const hasItems = shareAvailable || reviewAvailable || refreshAvailable;
   headerMoreBtn.hidden = !(mobile && hasItems);
   headerMoreBtn.setAttribute(
     "aria-expanded",
@@ -465,6 +468,7 @@ function syncHeaderOverflowMenu() {
   );
   headerOverflowMenu.hidden = !headerOverflowOpen || headerMoreBtn.hidden;
   if (headerOverflowShareBtn) headerOverflowShareBtn.hidden = !shareAvailable;
+  if (headerOverflowReviewBtn) headerOverflowReviewBtn.hidden = !reviewAvailable;
   if (headerOverflowRefreshBtn) headerOverflowRefreshBtn.hidden = !refreshAvailable;
   if (headerOverflowMenu.hidden) headerOverflowOpen = false;
 }
@@ -532,6 +536,11 @@ headerOverflowShareBtn?.addEventListener("click", () => {
   shareSnapshotBtn?.click();
 });
 
+headerOverflowReviewBtn?.addEventListener("click", () => {
+  setHeaderOverflowOpen(false);
+  workbenchInspectorBtn?.click();
+});
+
 headerOverflowRefreshBtn?.addEventListener("click", () => {
   setHeaderOverflowOpen(false);
   refreshFrontendBtn?.click();
@@ -587,7 +596,7 @@ if (typeof MutationObserver === "function") {
     syncHeaderOverflowMenu();
     syncComposerControlsDisclosure();
   });
-  [shareSnapshotBtn, refreshFrontendBtn, thinkingToggle, compactBtn, dropToolsBtn]
+  [shareSnapshotBtn, workbenchInspectorBtn, refreshFrontendBtn, thinkingToggle, compactBtn, dropToolsBtn]
     .forEach((el) => {
       if (!el) return;
       disclosureObserver.observe(el, {

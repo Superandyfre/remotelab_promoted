@@ -1140,7 +1140,6 @@ function switchTab(tab, { syncState = true } = {}) {
   const resolvedSidebarFilters = typeof sidebarFilters !== "undefined" ? sidebarFilters : null;
   const resolvedSessionList = typeof sessionList !== "undefined" ? sessionList : null;
   const resolvedSidebarSearch = typeof sidebarSearch !== "undefined" ? sidebarSearch : null;
-  const resolvedSidebarViewSwitcher = typeof sidebarViewSwitcher !== "undefined" ? sidebarViewSwitcher : null;
   const resolvedAgentsPanel = typeof agentsPanel !== "undefined" ? agentsPanel : null;
   const resolvedSettingsPanel = typeof settingsPanel !== "undefined" ? settingsPanel : null;
   const resolvedSessionListFooter = typeof sessionListFooter !== "undefined" ? sessionListFooter : null;
@@ -1183,7 +1182,6 @@ function switchTab(tab, { syncState = true } = {}) {
   }
   if (resolvedSessionList) resolvedSessionList.style.display = showingSessions ? "" : "none";
   if (resolvedSidebarSearch) resolvedSidebarSearch.style.display = showingSessions ? "" : "none";
-  if (resolvedSidebarViewSwitcher) resolvedSidebarViewSwitcher.style.display = showingSessions ? "" : "none";
   if (resolvedAgentsPanel) resolvedAgentsPanel.classList.toggle("visible", showingAgents);
   if (resolvedSettingsPanel) resolvedSettingsPanel.classList.toggle("visible", showingSettings);
   if (resolvedSessionListFooter) resolvedSessionListFooter.classList.toggle("hidden", !showingSessions);

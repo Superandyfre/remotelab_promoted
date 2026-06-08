@@ -46,11 +46,7 @@ function renderSessionList() {
     sessionList.appendChild(section);
   }
 
-  if (sessionViewMode === "inbox") {
-    renderInboxView(visibleSessions);
-  } else {
-    renderProjectsView(visibleSessions);
-  }
+  renderUnifiedView(visibleSessions);
 
   if (pinnedSessions.length === 0 && visibleSessions.length === 0) {
     const empty = document.createElement("div");
@@ -91,103 +87,28 @@ function renderSessionList() {
   renderArchivedSection();
 }
 
-function renderInboxView(visibleSessions) {
-  // Group sessions by attention band
-  const bandMap = new Map();
-  for (const s of visibleSessions) {
-    const band = getInboxBandForSession(s);
-    if (!bandMap.has(band)) bandMap.set(band, []);
-    bandMap.get(band).push(s);
+function renderUnifiedView(visibleSessions) {
+  // Sort all sessions by creation time, newest first
+  const sorted = [...visibleSessions].sort((a, b) => {
+    const ta = a.created ? new Date(a.created).getTime() : 0;
+    const tb = b.created ? new Date(b.created).getTime() : 0;
+    return tb - ta;
+  });
+
+  if (sorted.length === 0) return;
+
+  const group = document.createElement("div");
+  group.className = "folder-group unified-sessions";
+
+  const items = document.createElement("div");
+  items.className = "folder-group-items";
+
+  for (const s of sorted) {
+    items.appendChild(createActiveSessionItem(s, { showGroup: true }));
   }
 
-  for (const bandSpec of INBOX_BANDS) {
-    const sessions = bandMap.get(bandSpec.band);
-    if (!sessions || sessions.length === 0) continue;
-
-    const group = document.createElement("div");
-    group.className = "folder-group inbox-band";
-
-    const header = document.createElement("div");
-    const isCollapsed = collapsedFolders[bandSpec.key] === true;
-    header.className = "folder-group-header" + (isCollapsed ? " collapsed" : "");
-
-    const bandLabel = t(`sidebar.inbox.${bandSpec.key.split(":")[1]}`) !== `sidebar.inbox.${bandSpec.key.split(":")[1]}`
-      ? t(`sidebar.inbox.${bandSpec.key.split(":")[1]}`)
-      : bandSpec.label;
-
-    header.innerHTML = `<span class="folder-chevron">${renderUiIcon("chevron-down")}</span>
-      <span class="folder-name" title="${esc(bandLabel)}">${esc(bandLabel)}</span>
-      <span class="folder-count">${sessions.length}</span>`;
-    header.addEventListener("click", () => {
-      header.classList.toggle("collapsed");
-      collapsedFolders[bandSpec.key] = header.classList.contains("collapsed");
-      localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(collapsedFolders));
-    });
-
-    const items = document.createElement("div");
-    items.className = "folder-group-items";
-    for (const s of sessions) {
-      items.appendChild(createActiveSessionItem(s, { showGroup: true }));
-    }
-
-    group.appendChild(header);
-    group.appendChild(items);
-    sessionList.appendChild(group);
-  }
-}
-
-function renderProjectsView(visibleSessions) {
-  const groups = new Map();
-  for (const s of visibleSessions) {
-    const groupInfo = getSessionGroupInfo(s);
-    if (!groups.has(groupInfo.key)) {
-      groups.set(groupInfo.key, { ...groupInfo, sessions: [] });
-    }
-    groups.get(groupInfo.key).sessions.push(s);
-  }
-
-  for (const [groupKey, groupEntry] of groups) {
-    const folderSessions = groupEntry.sessions;
-    const group = document.createElement("div");
-    group.className = "folder-group";
-
-    const header = document.createElement("div");
-    header.className =
-      "folder-group-header" +
-      (collapsedFolders[groupKey] ? " collapsed" : "");
-
-    // Count sessions needing attention in this group
-    const attentionCount = folderSessions.filter((s) => {
-      const band = getInboxBandForSession(s);
-      return band <= 2; // unread-waiting, unread, or waiting
-    }).length;
-    const attentionBadge = attentionCount > 0
-      ? `<span class="folder-attention-count">${attentionCount}</span>`
-      : "";
-
-    header.innerHTML = `<span class="folder-chevron">${renderUiIcon("chevron-down")}</span>
-      <span class="folder-name" title="${esc(groupEntry.title)}">${esc(groupEntry.label)}</span>
-      ${attentionBadge}<span class="folder-count">${folderSessions.length}</span>`;
-    header.addEventListener("click", (e) => {
-      header.classList.toggle("collapsed");
-      collapsedFolders[groupKey] = header.classList.contains("collapsed");
-      localStorage.setItem(
-        COLLAPSED_GROUPS_STORAGE_KEY,
-        JSON.stringify(collapsedFolders),
-      );
-    });
-
-    const items = document.createElement("div");
-    items.className = "folder-group-items";
-
-    for (const s of folderSessions) {
-      items.appendChild(createActiveSessionItem(s));
-    }
-
-    group.appendChild(header);
-    group.appendChild(items);
-    sessionList.appendChild(group);
-  }
+  group.appendChild(items);
+  sessionList.appendChild(group);
 }
 
 function renderArchivedSection() {

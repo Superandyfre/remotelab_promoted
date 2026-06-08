@@ -454,11 +454,53 @@ function handleWsMessage(msg) {
         break;
       }
       if (msg.sessionId === currentSessionId) {
-        refreshCurrentSession({ forceFresh: true }).catch(() => {});
+        // Skip the full HTTP event fetch if a recent WS push already rendered them.
+        const wsPushCaughtUp = typeof isWsEventPushCaughtUp === "function"
+          && isWsEventPushCaughtUp(msg.sessionId);
+        refreshCurrentSession({
+          forceFresh: true,
+          wsPushCaughtUp,
+        }).catch(() => {});
       } else if (!visitorMode) {
         refreshSidebarSession(msg.sessionId, { forceFresh: true }).catch(() => {});
       }
       break;
+
+    case "session_events": {
+      // Low-latency path: render pushed events directly without HTTP round-trip.
+      if (!msg.sessionId || msg.sessionId !== currentSessionId) break;
+      if (!Array.isArray(msg.events) || msg.events.length === 0) break;
+      if (typeof renderEvent !== "function") break;
+      const wsEvents = msg.events;
+      const shouldStickToBottom =
+        messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+      for (const evt of wsEvents) {
+        if (typeof reconcilePendingMessageState === "function") {
+          reconcilePendingMessageState(evt);
+        }
+        renderEvent(evt, false);
+      }
+      if (typeof applyWorkbenchInspectorEventDelta === "function") {
+        applyWorkbenchInspectorEventDelta(msg.sessionId, wsEvents);
+      }
+      if (typeof appendRenderedEventStateDelta === "function") {
+        appendRenderedEventStateDelta(msg.sessionId, wsEvents, {
+          runState: "running",
+        });
+      }
+      if (typeof applyFinishedTurnCollapseState === "function") {
+        applyFinishedTurnCollapseState();
+      }
+      if (shouldStickToBottom) {
+        scrollToBottom();
+      }
+      // Suppress the next session_invalidated HTTP refresh if it arrives
+      // before the push-based rendering, to avoid redundant full fetches.
+      if (typeof markWsEventPushApplied === "function") {
+        markWsEventPushApplied(msg.sessionId, wsEvents);
+      }
+      break;
+    }
 
     case "system_notification":
       if (typeof showSystemToast === "function") {
